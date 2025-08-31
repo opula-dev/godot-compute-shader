@@ -1,0 +1,14 @@
+{
+  "files.exclude": {
+    "**/*.tscn": true,
+    "**/*.uid": true,
+    "**/*.import": true
+  },
+  "[csharp]": {
+    "editor.defaultFormatter": "ms-dotnettools.csharp",
+    "editor.formatOnSave": true,
+    "editor.formatOnType": true
+  },
+  "dotnet.backgroundAnalysis.analyzerDiagnosticsScope": "fullSolution",
+  "dotnet.backgroundAnalysis.compilerDiagnosticsScope": "fullSolution"
+}
