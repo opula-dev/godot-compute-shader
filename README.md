@@ -4,11 +4,13 @@
 [![.NET Version](https://img.shields.io/badge/.NET-9-green)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-This project provides a high-level abstraction for building and managing compute shader pipelines in Godot 4.4.1 using GLSL shaders. It handles shader compilation, resource management (including ping-pong buffers/textures for efficient data swapping), uniform binding, and dispatching compute operations. The system is designed for performance-critical applications like simulations, image processing, or render post-processing in Godot.
+This project offers a high-level abstraction for building and managing compute shader pipelines in Godot 4.4.1 using GLSL shaders. It handles shader compilation, resource management (including ping-pong buffers and textures for efficient data swapping), uniform binding, and dispatching compute operations.
 
 Built with C# (.NET 9), it leverages Godot's `RenderingDevice` for local compute operations. Shaders are automatically discovered from GLSL files in your project, parsed for uniforms, and integrated into user-defined multi-step pipelines.
 
 This repository serves as a public example on GitHub for developers looking to implement compute shaders in Godot without dealing with low-level boilerplate.
+
+Inspired by [Acerola-Compute](https://github.com/GarrettGunnell/Acerola-Compute), but focusing more on resource management and shader reflection without the shader-file processing.
 
 ## Features
 
@@ -23,11 +25,11 @@ This repository serves as a public example on GitHub for developers looking to i
 
 ## Todo
 
-* Sample Demo
-* Resource Pooling
-* Benchmarking
-* Testing for Ensured GLSL Support
-* Maybe Rewrite for GDScript
+- Sample Demo
+- Resource Pooling
+- Benchmarking
+- Testing for Ensured GLSL Support
+- Maybe Rewrite for GDScript
 
 ## Requirements
 
@@ -42,18 +44,102 @@ This repository serves as a public example on GitHub for developers looking to i
    ```
    git clone https://github.com/opula-dev/godot-compute-shader.git
    ```
+
 2. **Import into Godot**:
 
    - Open Godot and create a new project or add this as a submodule.
    - Copy the source files (e.g., `ComputeKernelRegistry.cs`, `ComputePipeline.cs`, etc.) into your project's `scripts/` or `addons/` folder.
    - Ensure `ComputeKernelRegistry` is added to your scene tree as a singleton (autoload) for automatic initialization.
+
 3. **Add Shaders**:
 
    - Place your GLSL compute shaders in `res://shaders/` (or any subdirectory). File names become kernel names (e.g., `my_shader.glsl` → kernel "my_shader").
+
 4. **Build and Run**:
 
    - Godot will compile the C# scripts automatically.
    - Run the project; the registry will discover and compile shaders on ready.
+
+## How It Works
+
+At a high level, the system follows this flow:
+
+1. **Shader Discovery and Compilation**: Scans the project for GLSL files and compiles them into kernels.
+2. **Pipeline Analysis**: Analyzes kernel uniforms to detect resources, including ping-pong pairs for optimization.
+3. **Resource Initialization**: Creates and manages GPU resources like textures, buffers, and samplers.
+4. **Dispatch Execution**: Updates resources, binds uniforms, dispatches compute workgroups, and flips ping-pong states.
+5. **Output Retrieval and Cleanup**: Extracts results and frees resources.
+
+Here's a diagram of the pipeline flow:
+
+```mermaid
+flowchart TD
+    A[User Script]
+    B[ComputeKernelRegistry Singleton (ComputeKernelRegistry.cs)]
+    C[Discovers GLSL files recursively]
+    D[Compiles to ComputeKernel instances (ComputeKernel.cs)]
+    E[Parses GLSL for uniforms, push constants, local sizes (GlslShaderParser.cs, UniformParser.cs)]
+    F[Compiles to SPIR-V and creates pipelines]
+    G[ComputePipeline Construction (ComputePipeline.cs)]
+    H[Fetches kernels by name]
+    I[Analyzes bindings for consistency and ping-pong (PipelineAnalyzer.cs)]
+    J[Initializes resources (PipelineResourceManager.cs)]
+    K[Textures/Buffers/Samplers (PipelineResource.cs, ResourceHelper.cs)]
+    L[Ping-pong for read/write pairs (PingPongTextureResource, PingPongBufferResource in PipelineResource.cs)]
+    M[Dispatch (ComputePipeline.cs)]
+    N[Updates resources with user data map (UniformKey.cs for keys)]
+    O[For each kernel step:]
+    P[Binds uniform sets]
+    Q[Sets push constants if present]
+    R[Dispatches workgroups calculated via local sizes]
+    S[Adds barriers for sync]
+    T[Flips ping-pong resources (IPingPongResource)]
+    U[Submits and syncs on GPU]
+    V[Output Retrieval]
+    W[TryGetOutputTexture for byte array data]
+    X[Cleanup to free RIDs]
+    A --> B
+    B --> C
+    B --> D
+    D --> E
+    D --> F
+    B --> G
+    G --> H
+    G --> I
+    G --> J
+    J --> K
+    J --> L
+    G --> M
+    M --> N
+    M --> O
+    O --> P
+    P --> Q
+    Q --> R
+    R --> S
+    S --> T
+    M --> U
+    M --> V
+    V --> W
+    V --> X
+```
+
+### Some Explanations
+
+**Shader Discovery** (`ComputeKernelRegistry.cs`): As an autoload singleton, it uses `DirAccess` to scan directories like `res://shaders/` for `.glsl` files. Each file compiles into a `ComputeKernel`. Kernels are stored in a dictionary for easy access via `TryGetKernel` or `TryGetKernels`.
+
+**GLSL Parsing** (`GlslShaderParser.cs` and `UniformParser.cs`): Strips comments. Uses regex parsers (from `UniformRegex.cs`) to extract uniforms with details like binding, set, format, access (read/write), and array size. Detects push constants and local workgroup sizes (`LocalGroupParser.cs`). This creates `UniformInfo` records for binding checks.
+
+**Uniform Keys** (`UniformKey.cs`): Immutable structs with roles (e.g., `UniformRole.Read`, `Write`, `Array`). Parses from suffixes like `_read` or `[index]`. Validation via `UniformKeyValidator.cs` ensures correctness. Canonical forms from `AsCanonical()` aid lookups.
+
+**Pipeline Analysis** (`PipelineAnalyzer.cs`): Scans uniforms to build `AnalysisResult` with bindings. Detects ping-pong by matching read/write pairs (e.g., based on name, format, set). Classifies into samplers, textures, buffers for creation.
+
+**Resource Management** (`PipelineResourceManager.cs` and `PipelineResource.cs`): Handles RIDs for resources. Subclasses of `PipelineResource` manage specific uniform types:
+
+- `TextureResource` and `BufferResource` create/update with `ResourceHelper.cs`.
+- Ping-pong variants implement `IPingPongResource` for RID flipping without copies, optimizing multi-step pipelines.
+- Dirty checks use hashing (`XxHash32`) to skip unchanged updates.
+
+**Execution** (`ComputePipeline.cs`): In `Dispatch()`, updates resources. Begins a compute list. Processes each kernel (binds sets, sets push constants, dispatches). Ends the list, submits, and syncs. Workgroups calculated as `(textureSize + localSize - 1) / localSize`.
 
 ## Usage
 
