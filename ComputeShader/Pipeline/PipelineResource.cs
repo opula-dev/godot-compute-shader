@@ -7,7 +7,6 @@ namespace Godot.ComputeShader.Pipeline;
 
 using UniformType = RenderingDevice.UniformType;
 
-
 // Interface for resources that support ping-pong (flipping)
 public interface IPingPongResource
 {
@@ -20,14 +19,14 @@ public abstract class PipelineResource
     public BindingInfo Binding { get; }
     public uint ArraySize => Binding.Uniform.ArraySize;
 
-    protected RenderingDevice RenderingDevice { get; }
-    protected Rid[] Rids { get; }
+    protected RenderingDevice _rd;
+    protected Rid[] _rids;
 
     public PipelineResource(RenderingDevice rd, BindingInfo binding)
     {
-        RenderingDevice = rd;
         Binding = binding;
-        Rids = new Rid[ArraySize];
+        _rd = rd;
+        _rids = new Rid[ArraySize];
     }
 
     // Initialize the resource (e.g., create RIDs)
@@ -43,13 +42,13 @@ public abstract class PipelineResource
         {
             return new Rid();
         }
-        return Rids[key.ArrayIndex];
+        return _rids[key.ArrayIndex];
     }
 
     // Cleanup RIDs
     public virtual void Cleanup()
     {
-        ResourceHelper.FreeRids(RenderingDevice, Rids);
+        ResourceHelper.FreeRids(_rd, _rids);
     }
 
     protected static (bool IsDirty, uint NewHash) CheckBufferDirtyAndGetHash(byte[] newData, uint lastEntry)
@@ -76,13 +75,13 @@ public abstract class PipelineResource
 
 public class BufferResource : PipelineResource
 {
-    private readonly uint[] sizes;
-    private readonly uint[] lastHashes;
+    private readonly uint[] _sizes;
+    private readonly uint[] _lastHashes;
 
     public BufferResource(RenderingDevice rd, BindingInfo binding) : base(rd, binding)
     {
-        sizes = new uint[ArraySize];
-        lastHashes = new uint[ArraySize];
+        _sizes = new uint[ArraySize];
+        _lastHashes = new uint[ArraySize];
     }
 
     public override void Initialize()
@@ -90,8 +89,8 @@ public class BufferResource : PipelineResource
         var uniform = Binding.Uniform;
         for (uint i = 0; i < ArraySize; i++)
         {
-            Rids[i] = ResourceHelper.CreateBuffer(RenderingDevice, uniform.Type, 0, []);
-            if (!Rids[i].IsValid)
+            _rids[i] = ResourceHelper.CreateBuffer(_rd, uniform.Type, 0, []);
+            if (!_rids[i].IsValid)
             {
                 GD.PushError($"Failed to create texture (index {i}) for {Binding.Uniform.Name}");
             }
@@ -103,18 +102,18 @@ public class BufferResource : PipelineResource
         var index = key.ArrayIndex;
         if (data == null || data.Length == 0 || !IsValidIndex(index)) return;
 
-        var bufferRid = Rids[index];
-        var lastHash = lastHashes[index];
-        var size = sizes[index];
+        var bufferRid = _rids[index];
+        var lastHash = _lastHashes[index];
+        var size = _sizes[index];
 
         var (isDirty, newHash) = CheckBufferDirtyAndGetHash(data, lastHash);
         if (!isDirty) return;
 
         Rid newRid = Binding.Uniform.Type switch
         {
-            UniformType.StorageBuffer => RenderingDevice.StorageBufferCreate((uint)data.Length, data),
-            UniformType.UniformBuffer => RenderingDevice.UniformBufferCreate((uint)data.Length, data),
-            UniformType.TextureBuffer => RenderingDevice.TextureBufferCreate((uint)data.Length, Binding.Uniform.Format, data),
+            UniformType.StorageBuffer => _rd.StorageBufferCreate((uint)data.Length, data),
+            UniformType.UniformBuffer => _rd.UniformBufferCreate((uint)data.Length, data),
+            UniformType.TextureBuffer => _rd.TextureBufferCreate((uint)data.Length, Binding.Uniform.Format, data),
             _ => throw new NotSupportedException($"Unsupported buffer type {Binding.Uniform.Type}")
         };
 
@@ -128,18 +127,18 @@ public class BufferResource : PipelineResource
         {
             if (size == (uint)data.Length)
             {
-                ResourceHelper.UpdateBuffer(RenderingDevice, bufferRid, (uint)data.Length, data);
+                ResourceHelper.UpdateBuffer(_rd, bufferRid, (uint)data.Length, data);
                 newRid = bufferRid; // Reuse
             }
             else
             {
-                RenderingDevice.FreeRid(bufferRid);
+                _rd.FreeRid(bufferRid);
             }
         }
 
-        Rids[index] = newRid;
-        sizes[index] = (uint)data.Length;
-        lastHashes[index] = newHash;
+        _rids[index] = newRid;
+        _sizes[index] = (uint)data.Length;
+        _lastHashes[index] = newHash;
     }
 
     public override Rid GetRid(UniformKey key)
@@ -150,20 +149,20 @@ public class BufferResource : PipelineResource
     public override void Cleanup()
     {
         base.Cleanup();
-        Array.Fill(sizes, 0u);
-        Array.Fill(lastHashes, 0u);
+        Array.Fill(_sizes, 0u);
+        Array.Fill(_lastHashes, 0u);
     }
 }
 
 public class TextureResource : PipelineResource
 {
-    private readonly Vector3I textureSize;
-    private readonly uint[] lastHashes;
+    private readonly Vector3I _textureSize;
+    private readonly uint[] _lastHashes;
 
     public TextureResource(RenderingDevice rd, BindingInfo binding, Vector3I textureSize) : base(rd, binding)
     {
-        this.textureSize = textureSize;
-        lastHashes = new uint[ArraySize];
+        _textureSize = textureSize;
+        _lastHashes = new uint[ArraySize];
     }
 
     public override void Initialize()
@@ -171,8 +170,8 @@ public class TextureResource : PipelineResource
         var uniform = Binding.Uniform;
         for (uint i = 0; i < ArraySize; i++)
         {
-            Rids[i] = ResourceHelper.CreateTexture(RenderingDevice, uniform.Format, textureSize, uniform.Dimension);
-            if (!Rids[i].IsValid)
+            _rids[i] = ResourceHelper.CreateTexture(_rd, uniform.Format, _textureSize, uniform.Dimension);
+            if (!_rids[i].IsValid)
             {
                 GD.PushError($"Failed to create texture (index {i}) for {Binding.Uniform.Name}");
             }
@@ -184,18 +183,18 @@ public class TextureResource : PipelineResource
         var index = key.ArrayIndex;
         if (!IsValidIndex(index)) { return; }
 
-        var textureRid = Rids[index];
+        var textureRid = _rids[index];
         if (data == null || data.Length == 0 || !textureRid.IsValid) return;
 
-        var (isDirty, newHash) = CheckBufferDirtyAndGetHash(data, lastHashes[index]);
+        var (isDirty, newHash) = CheckBufferDirtyAndGetHash(data, _lastHashes[index]);
         if (!isDirty)
         {
             return;
         }
 
         // Assume layer 0 for simplicity; extend for 3D if needed
-        ResourceHelper.UpdateTexture(RenderingDevice, textureRid, layer: 0, data);
-        lastHashes[index] = newHash;
+        ResourceHelper.UpdateTexture(_rd, textureRid, layer: 0, data);
+        _lastHashes[index] = newHash;
     }
 
     public override Rid GetRid(UniformKey key)
@@ -206,7 +205,7 @@ public class TextureResource : PipelineResource
     public override void Cleanup()
     {
         base.Cleanup();
-        Array.Fill(lastHashes, 0u);
+        Array.Fill(_lastHashes, 0u);
     }
 }
 
@@ -216,14 +215,14 @@ public class SamplerResource(
     RDSamplerState? customState
 ) : PipelineResource(rd, binding)
 {
-    private readonly RDSamplerState? customState = customState;
+    private readonly RDSamplerState? _customState = customState;
 
     public override void Initialize()
     {
         for (uint i = 0; i < ArraySize; i++)
         {
-            Rids[i] = ResourceHelper.CreateSampler(RenderingDevice, customState);
-            if (!Rids[i].IsValid)
+            _rids[i] = ResourceHelper.CreateSampler(_rd, _customState);
+            if (!_rids[i].IsValid)
             {
                 GD.PushError($"Failed to create sampler (index {i}) for {Binding.Uniform.Name}");
             }
@@ -251,12 +250,12 @@ public class PingPongTextureResource : PipelineResource, IPingPongResource
     public BindingInfo ReadBinding { get; }
     public BindingInfo WriteBinding { get; }
 
-    private readonly Rid[] pongRids; // use base.Rids for ping textures, this array for pong
-    private readonly Vector3I textureSize;
-    private bool state; // false: textures[0] = write; true: textures[1] = read;
+    private readonly Rid[] _pongRids; // use base.Rids for ping textures, this array for pong
+    private readonly Vector3I _textureSize;
+    private bool _state; // false: textures[0] = write; true: textures[1] = read;
 
-    private readonly uint[] lastHashesPing; // For Rids (ping)
-    private readonly uint[] lastHashesPong; // For pongRids
+    private readonly uint[] _lastHashesPing; // For Rids (ping)
+    private readonly uint[] _lastHashesPong; // For pongRids
 
     public PingPongTextureResource(
         RenderingDevice rd,
@@ -264,13 +263,13 @@ public class PingPongTextureResource : PipelineResource, IPingPongResource
         Vector3I textureSize
     ) : base(rd, binding.ReadBinding)
     {
-        this.textureSize = textureSize;
+        _textureSize = textureSize;
         ReadBinding = binding.ReadBinding;
         WriteBinding = binding.WriteBinding;
 
-        pongRids = new Rid[ArraySize];
-        lastHashesPing = new uint[ArraySize];
-        lastHashesPong = new uint[ArraySize];
+        _pongRids = new Rid[ArraySize];
+        _lastHashesPing = new uint[ArraySize];
+        _lastHashesPong = new uint[ArraySize];
     }
 
     public override void Initialize()
@@ -279,9 +278,9 @@ public class PingPongTextureResource : PipelineResource, IPingPongResource
 
         for (uint i = 0; i < ArraySize; i++)
         {
-            Rids[i] = ResourceHelper.CreateTexture(RenderingDevice, uniform.Format, textureSize, uniform.Dimension);
-            pongRids[i] = ResourceHelper.CreateTexture(RenderingDevice, uniform.Format, textureSize, uniform.Dimension);
-            if (!Rids[i].IsValid || !pongRids[i].IsValid)
+            _rids[i] = ResourceHelper.CreateTexture(_rd, uniform.Format, _textureSize, uniform.Dimension);
+            _pongRids[i] = ResourceHelper.CreateTexture(_rd, uniform.Format, _textureSize, uniform.Dimension);
+            if (!_rids[i].IsValid || !_pongRids[i].IsValid)
             {
                 GD.PushError($"Failed to create texture (index {i}) for {Binding.Uniform.Name}");
             }
@@ -307,12 +306,12 @@ public class PingPongTextureResource : PipelineResource, IPingPongResource
 
         // Determine target based on current state and role
         var targetRid = isRead
-            ? (state ? Rids[index] : pongRids[index])
-            : (state ? pongRids[index] : Rids[index]);
+            ? (_state ? _rids[index] : _pongRids[index])
+            : (_state ? _pongRids[index] : _rids[index]);
 
         var targetHashes = isRead
-            ? (state ? lastHashesPing : lastHashesPong)
-            : (state ? lastHashesPong : lastHashesPing);
+            ? (_state ? _lastHashesPing : _lastHashesPong)
+            : (_state ? _lastHashesPong : _lastHashesPing);
 
         if (!targetRid.IsValid)
         {
@@ -326,7 +325,7 @@ public class PingPongTextureResource : PipelineResource, IPingPongResource
         }
 
         // Assume layer 0 for simplicity; extend for 3D if needed
-        ResourceHelper.UpdateTexture(RenderingDevice, targetRid, layer: 0, data);
+        ResourceHelper.UpdateTexture(_rd, targetRid, layer: 0, data);
         targetHashes[index] = newHash;
     }
 
@@ -337,11 +336,11 @@ public class PingPongTextureResource : PipelineResource, IPingPongResource
 
         if (key.IsRole(UniformRole.Read))
         {
-            return state ? Rids[index] : pongRids[index];
+            return _state ? _rids[index] : _pongRids[index];
         }
         if (key.IsRole(UniformRole.Write))
         {
-            return state ? pongRids[index] : Rids[index];
+            return _state ? _pongRids[index] : _rids[index];
         }
         GD.PushError(
             $"Invalid uniform key '{key}' for ping-pong {ReadBinding.Uniform.Name}." +
@@ -351,15 +350,15 @@ public class PingPongTextureResource : PipelineResource, IPingPongResource
 
     public void Flip()
     {
-        state = !state;
+        _state = !_state;
     }
 
     public override void Cleanup()
     {
         base.Cleanup();
-        ResourceHelper.FreeRids(RenderingDevice, pongRids);
-        Array.Fill(lastHashesPing, 0u);
-        Array.Fill(lastHashesPong, 0u);
+        ResourceHelper.FreeRids(_rd, _pongRids);
+        Array.Fill(_lastHashesPing, 0u);
+        Array.Fill(_lastHashesPong, 0u);
     }
 }
 
@@ -368,13 +367,13 @@ public class PingPongBufferResource : PipelineResource, IPingPongResource
     public BindingInfo ReadBinding { get; }
     public BindingInfo WriteBinding { get; }
 
-    private readonly Rid[] pongRids; // use base.Rids for ping buffers, this array for pong
-    private bool state; // false: Rids = write; true: Rids = read;
+    private readonly Rid[] _pongRids; // use base.Rids for ping buffers, this array for pong
+    private bool _state; // false: Rids = write; true: Rids = read;
 
-    private readonly uint[] sizesPing; // For Rids (ping)
-    private readonly uint[] sizesPong; // For pongRids
-    private readonly uint[] lastHashesPing; // For Rids (ping)
-    private readonly uint[] lastHashesPong; // For pongRids
+    private readonly uint[] _sizesPing; // For Rids (ping)
+    private readonly uint[] _sizesPong; // For pongRids
+    private readonly uint[] _lastHashesPing; // For Rids (ping)
+    private readonly uint[] _lastHashesPong; // For pongRids
 
     public PingPongBufferResource(
         RenderingDevice rd,
@@ -384,11 +383,11 @@ public class PingPongBufferResource : PipelineResource, IPingPongResource
         ReadBinding = binding.ReadBinding;
         WriteBinding = binding.WriteBinding;
 
-        pongRids = new Rid[ArraySize];
-        sizesPing = new uint[ArraySize];
-        sizesPong = new uint[ArraySize];
-        lastHashesPing = new uint[ArraySize];
-        lastHashesPong = new uint[ArraySize];
+        _pongRids = new Rid[ArraySize];
+        _sizesPing = new uint[ArraySize];
+        _sizesPong = new uint[ArraySize];
+        _lastHashesPing = new uint[ArraySize];
+        _lastHashesPong = new uint[ArraySize];
     }
 
     public override void Initialize()
@@ -396,9 +395,9 @@ public class PingPongBufferResource : PipelineResource, IPingPongResource
         var uniform = ReadBinding.Uniform; // Formats match from analyzer
         for (uint i = 0; i < ArraySize; i++)
         {
-            Rids[i] = ResourceHelper.CreateBuffer(RenderingDevice, uniform.Type, 0, []);
-            pongRids[i] = ResourceHelper.CreateBuffer(RenderingDevice, uniform.Type, 0, []);
-            if (!Rids[i].IsValid || !pongRids[i].IsValid)
+            _rids[i] = ResourceHelper.CreateBuffer(_rd, uniform.Type, 0, []);
+            _pongRids[i] = ResourceHelper.CreateBuffer(_rd, uniform.Type, 0, []);
+            if (!_rids[i].IsValid || !_pongRids[i].IsValid)
             {
                 GD.PushError($"Failed to create buffer (index {i}) for {Binding.Uniform.Name}");
             }
@@ -421,16 +420,16 @@ public class PingPongBufferResource : PipelineResource, IPingPongResource
 
         // Determine target based on current state and role
         var targetRid = isRead
-            ? (state ? Rids[index] : pongRids[index])
-            : (state ? pongRids[index] : Rids[index]);
+            ? (_state ? _rids[index] : _pongRids[index])
+            : (_state ? _pongRids[index] : _rids[index]);
 
         var targetSizes = isRead
-            ? (state ? sizesPing : sizesPong)
-            : (state ? sizesPong : sizesPing);
+            ? (_state ? _sizesPing : _sizesPong)
+            : (_state ? _sizesPong : _sizesPing);
 
         var targetHashes = isRead
-            ? (state ? lastHashesPing : lastHashesPong)
-            : (state ? lastHashesPong : lastHashesPing);
+            ? (_state ? _lastHashesPing : _lastHashesPong)
+            : (_state ? _lastHashesPong : _lastHashesPing);
 
         var lastHash = targetHashes[index];
         var size = targetSizes[index];
@@ -440,9 +439,9 @@ public class PingPongBufferResource : PipelineResource, IPingPongResource
 
         Rid newRid = Binding.Uniform.Type switch
         {
-            UniformType.StorageBuffer => RenderingDevice.StorageBufferCreate((uint)data.Length, data),
-            UniformType.UniformBuffer => RenderingDevice.UniformBufferCreate((uint)data.Length, data),
-            UniformType.TextureBuffer => RenderingDevice.TextureBufferCreate((uint)data.Length, Binding.Uniform.Format, data),
+            UniformType.StorageBuffer => _rd.StorageBufferCreate((uint)data.Length, data),
+            UniformType.UniformBuffer => _rd.UniformBufferCreate((uint)data.Length, data),
+            UniformType.TextureBuffer => _rd.TextureBufferCreate((uint)data.Length, Binding.Uniform.Format, data),
             _ => throw new NotSupportedException($"Unsupported buffer type {Binding.Uniform.Type}")
         };
 
@@ -456,44 +455,44 @@ public class PingPongBufferResource : PipelineResource, IPingPongResource
         {
             if (size == (uint)data.Length)
             {
-                ResourceHelper.UpdateBuffer(RenderingDevice, targetRid, (uint)data.Length, data);
+                ResourceHelper.UpdateBuffer(_rd, targetRid, (uint)data.Length, data);
                 newRid = targetRid; // Reuse
             }
             else
             {
-                RenderingDevice.FreeRid(targetRid);
+                _rd.FreeRid(targetRid);
             }
         }
 
         // Assign back to the correct array
         if (isRead)
         {
-            if (state)
+            if (_state)
             {
-                Rids[index] = newRid;
-                sizesPing[index] = (uint)data.Length;
-                lastHashesPing[index] = newHash;
+                _rids[index] = newRid;
+                _sizesPing[index] = (uint)data.Length;
+                _lastHashesPing[index] = newHash;
             }
             else
             {
-                pongRids[index] = newRid;
-                sizesPong[index] = (uint)data.Length;
-                lastHashesPong[index] = newHash;
+                _pongRids[index] = newRid;
+                _sizesPong[index] = (uint)data.Length;
+                _lastHashesPong[index] = newHash;
             }
         }
         else // Write
         {
-            if (state)
+            if (_state)
             {
-                pongRids[index] = newRid;
-                sizesPong[index] = (uint)data.Length;
-                lastHashesPong[index] = newHash;
+                _pongRids[index] = newRid;
+                _sizesPong[index] = (uint)data.Length;
+                _lastHashesPong[index] = newHash;
             }
             else
             {
-                Rids[index] = newRid;
-                sizesPing[index] = (uint)data.Length;
-                lastHashesPing[index] = newHash;
+                _rids[index] = newRid;
+                _sizesPing[index] = (uint)data.Length;
+                _lastHashesPing[index] = newHash;
             }
         }
     }
@@ -505,11 +504,11 @@ public class PingPongBufferResource : PipelineResource, IPingPongResource
 
         if (key.IsRole(UniformRole.Read))
         {
-            return state ? Rids[index] : pongRids[index];
+            return _state ? _rids[index] : _pongRids[index];
         }
         if (key.IsRole(UniformRole.Write))
         {
-            return state ? pongRids[index] : Rids[index];
+            return _state ? _pongRids[index] : _rids[index];
         }
         GD.PushError(
             $"Invalid uniform key '{key}' for ping-pong {ReadBinding.Uniform.Name}." +
@@ -519,16 +518,16 @@ public class PingPongBufferResource : PipelineResource, IPingPongResource
 
     public void Flip()
     {
-        state = !state;
+        _state = !_state;
     }
 
     public override void Cleanup()
     {
         base.Cleanup();
-        ResourceHelper.FreeRids(RenderingDevice, pongRids);
-        Array.Fill(sizesPing, 0u);
-        Array.Fill(sizesPong, 0u);
-        Array.Fill(lastHashesPing, 0u);
-        Array.Fill(lastHashesPong, 0u);
+        ResourceHelper.FreeRids(_rd, _pongRids);
+        Array.Fill(_sizesPing, 0u);
+        Array.Fill(_sizesPong, 0u);
+        Array.Fill(_lastHashesPing, 0u);
+        Array.Fill(_lastHashesPong, 0u);
     }
 }

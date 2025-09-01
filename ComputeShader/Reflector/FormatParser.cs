@@ -8,7 +8,7 @@ using DataFormat = RenderingDevice.DataFormat;
 
 public static class FormatParser
 {
-    private static readonly Dictionary<string, DataFormat> _glslImageFormatToGodotDataFormat = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, DataFormat> s_glslImageFormatToGodotDataFormat = new(StringComparer.OrdinalIgnoreCase)
     {
         // Single Precision Float   
         ["rgba32f"] = DataFormat.R32G32B32A32Sfloat, // 4 channels
@@ -69,7 +69,7 @@ public static class FormatParser
     public static bool TryGetDataFormat(string format, out DataFormat dataFormat)
     {
         dataFormat = DataFormat.Max;
-        if (!string.IsNullOrEmpty(format) && !_glslImageFormatToGodotDataFormat.TryGetValue(format, out dataFormat))
+        if (!string.IsNullOrEmpty(format) && !s_glslImageFormatToGodotDataFormat.TryGetValue(format, out dataFormat))
         {
             GD.PushWarning($"Unsupported Data Format: {format}");
             return false;

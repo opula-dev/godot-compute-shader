@@ -36,7 +36,6 @@ public readonly partial struct UniformKey : IEquatable<UniformKey>
     public bool IsPushConstant => IsRole(UniformRole.Push);
     public int Step { get; init; } = -1;
 
-    // Constructor for normal/ping-pong/array uniforms
     public UniformKey(
         string baseName = "",
         UniformRole role = UniformRole.None,
@@ -56,17 +55,86 @@ public readonly partial struct UniformKey : IEquatable<UniformKey>
         }
     }
 
-    public bool Equals(UniformKey other)
+    public static UniformKey TryParse(string input, RenderingDevice.UniformType uniformType)
     {
-        return BaseName == other.BaseName &&
-               Role == other.Role &&
-               ArrayIndex == other.ArrayIndex &&
-               IsPushConstant == other.IsPushConstant &&
-               Step == other.Step;
+        UniformKey result = default;
+        if (string.IsNullOrEmpty(input))
+        {
+            GD.PushError("Invalid uniform key string.");
+            return result;
+        }
+
+        if (input.StartsWith(PushPrefix))
+        {
+            if (int.TryParse(input[PushPrefix.Length..], out int step) && step >= 0)
+            {
+                result = new UniformKey(string.Empty, UniformRole.Push, -1, step);
+            }
+            GD.PushError($"Invalid push constant key: '{input}'. Expected format '{PushPrefix}<step>' with non-negative step.");
+            return result;
+        }
+
+        string baseName = input;
+        int arrayIndex = -1;
+        UniformRole role = GetTypeRole(uniformType);
+
+        // Parse array index
+        var arrayMatch = ArrayFormatRegex().Match(input);
+        if (arrayMatch.Success)
+        {
+            baseName = arrayMatch.Groups[1].Value;
+            arrayIndex = int.Parse(arrayMatch.Groups[2].Value);
+            role |= UniformRole.Array;
+        }
+
+        // Parse read/write suffixes (override or add to typeRole)
+        if (baseName.EndsWith(WriteSuffix))
+        {
+            baseName = baseName[..^WriteSuffix.Length];
+            role |= UniformRole.Write;
+        }
+        else if (baseName.EndsWith(ReadSuffix))
+        {
+            baseName = baseName[..^ReadSuffix.Length];
+            role |= UniformRole.Read;
+        }
+
+        result = new UniformKey(baseName, role, arrayIndex, -1);
+        return result;
     }
 
-    public override bool Equals(object? obj) => obj is UniformKey other && Equals(other);
+    public static UniformRole GetTypeRole(RenderingDevice.UniformType uniformType)
+    {
+        return uniformType switch
+        {
+            RenderingDevice.UniformType.Sampler => UniformRole.Sampler,
+            RenderingDevice.UniformType.SamplerWithTexture => UniformRole.Sampler | UniformRole.Texture,
+            RenderingDevice.UniformType.Texture => UniformRole.Texture,
+            RenderingDevice.UniformType.Image => UniformRole.Texture,
+            RenderingDevice.UniformType.TextureBuffer => UniformRole.Texture | UniformRole.Buffer,
+            RenderingDevice.UniformType.SamplerWithTextureBuffer => UniformRole.Sampler | UniformRole.Texture | UniformRole.Buffer,
+            RenderingDevice.UniformType.ImageBuffer => UniformRole.Texture | UniformRole.Buffer,
+            RenderingDevice.UniformType.UniformBuffer => UniformRole.Buffer,
+            RenderingDevice.UniformType.StorageBuffer => UniformRole.Buffer,
+            RenderingDevice.UniformType.InputAttachment => UniformRole.None, // Unimplemented
+            _ => UniformRole.None,
+        };
+    }
 
+    public bool IsRole(UniformRole role) => (Role & role) == role;
+
+    public UniformKey AsCanonical()
+    {
+        UniformRole canonicalRole = Role & ~UniformRole.Array; // Remove array index specificity
+        if (IsRole(UniformRole.Read) || IsRole(UniformRole.Write))
+        {
+            canonicalRole |= UniformRole.Read | UniformRole.Write; // Normalize to paired read-write for ping-pong lookups
+        }
+
+        return new UniformKey(BaseName, canonicalRole, -1, -1, canonical: true);
+    }
+
+    #region IEquatable
     public static bool operator ==(UniformKey left, UniformKey right)
     {
         return left.Equals(right);
@@ -76,6 +144,19 @@ public readonly partial struct UniformKey : IEquatable<UniformKey>
     {
         return !(left == right);
     }
+
+    public bool Equals(UniformKey other)
+    {
+        return BaseName == other.BaseName &&
+               Role == other.Role &&
+               ArrayIndex == other.ArrayIndex &&
+               IsPushConstant == other.IsPushConstant &&
+               Step == other.Step;
+    }
+    #endregion
+
+    #region object
+    public override bool Equals(object? obj) => obj is UniformKey other && Equals(other);
 
     public override int GetHashCode() =>
         HashCode.Combine(
@@ -135,85 +216,7 @@ public readonly partial struct UniformKey : IEquatable<UniformKey>
 
         return $"{baseName}{suffix}{index}";
     }
-
-    public bool IsRole(UniformRole role) => (Role & role) == role;
-
-    public static UniformKey TryParse(string input, RenderingDevice.UniformType uniformType)
-    {
-        UniformKey result = default;
-        if (string.IsNullOrEmpty(input))
-        {
-            GD.PushError("Invalid uniform key string.");
-            return result;
-        }
-
-        if (input.StartsWith(PushPrefix))
-        {
-            if (int.TryParse(input[PushPrefix.Length..], out int step) && step >= 0)
-            {
-                result = new UniformKey(string.Empty, UniformRole.Push, -1, step);
-            }
-            GD.PushError($"Invalid push constant key: '{input}'. Expected format '{PushPrefix}<step>' with non-negative step.");
-            return result;
-        }
-
-        string baseName = input;
-        int arrayIndex = -1;
-        UniformRole role = GetTypeRole(uniformType);
-
-        // Parse array index
-        var arrayMatch = ArrayFormatRegex().Match(input);
-        if (arrayMatch.Success)
-        {
-            baseName = arrayMatch.Groups[1].Value;
-            arrayIndex = int.Parse(arrayMatch.Groups[2].Value);
-            role |= UniformRole.Array;
-        }
-
-        // Parse read/write suffixes (override or add to typeRole)
-        if (baseName.EndsWith(WriteSuffix))
-        {
-            baseName = baseName[..^WriteSuffix.Length];
-            role |= UniformRole.Write;
-        }
-        else if (baseName.EndsWith(ReadSuffix))
-        {
-            baseName = baseName[..^ReadSuffix.Length];
-            role |= UniformRole.Read;
-        }
-
-        result = new UniformKey(baseName, role, arrayIndex, -1);
-        return result;
-    }
-
-    public static UniformKey GetCanonical(UniformKey key)
-    {
-        UniformRole canonicalRole = key.Role & ~UniformRole.Array; // Remove array index specificity
-        if (key.IsRole(UniformRole.Read) || key.IsRole(UniformRole.Write))
-        {
-            canonicalRole |= UniformRole.Read | UniformRole.Write; // Normalize to paired read-write for ping-pong lookups
-        }
-
-        return new UniformKey(key.BaseName, canonicalRole, -1, -1, canonical: true);
-    }
-
-    public static UniformRole GetTypeRole(RenderingDevice.UniformType uniformType)
-    {
-        return uniformType switch
-        {
-            RenderingDevice.UniformType.Sampler => UniformRole.Sampler,
-            RenderingDevice.UniformType.SamplerWithTexture => UniformRole.Sampler | UniformRole.Texture,
-            RenderingDevice.UniformType.Texture => UniformRole.Texture,
-            RenderingDevice.UniformType.Image => UniformRole.Texture,
-            RenderingDevice.UniformType.TextureBuffer => UniformRole.Texture | UniformRole.Buffer,
-            RenderingDevice.UniformType.SamplerWithTextureBuffer => UniformRole.Sampler | UniformRole.Texture | UniformRole.Buffer,
-            RenderingDevice.UniformType.ImageBuffer => UniformRole.Texture | UniformRole.Buffer,
-            RenderingDevice.UniformType.UniformBuffer => UniformRole.Buffer,
-            RenderingDevice.UniformType.StorageBuffer => UniformRole.Buffer,
-            RenderingDevice.UniformType.InputAttachment => UniformRole.None, // Unimplemented
-            _ => UniformRole.None,
-        };
-    }
+    #endregion
 }
 
 public static class UniformKeyValidator

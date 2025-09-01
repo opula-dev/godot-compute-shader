@@ -87,9 +87,7 @@ public static class PipelineAnalyzer
                 readBinf.Uniform.Dimension == writeBinf.Uniform.Dimension &&
                 readBinf.Uniform.Set == writeBinf.Uniform.Set)
             {
-                var canonicalPongPongKey = UniformKey.GetCanonical(
-                    UniformKey.TryParse(name, readBinf.Uniform.Type));
-
+                var canonicalPongPongKey = UniformKey.TryParse(name, readBinf.Uniform.Type).AsCanonical();
                 pingPongBindings[canonicalPongPongKey] =
                     new PingPongBindingInfo
                     {
@@ -108,7 +106,7 @@ public static class PipelineAnalyzer
             var uniformType = binf.Uniform.Type;
             if (uniformType == UniformType.Sampler)
             {
-                samplerBindings[UniformKey.GetCanonical(key)] = binf;
+                samplerBindings[key.AsCanonical()] = binf;
             }
             else if (
                 uniformType == UniformType.Image ||
@@ -116,14 +114,14 @@ public static class PipelineAnalyzer
                 uniformType == UniformType.SamplerWithTexture ||
                 uniformType == UniformType.SamplerWithTextureBuffer)
             {
-                textureBindings[UniformKey.GetCanonical(key)] = binf;
+                textureBindings[key.AsCanonical()] = binf;
             }
             else if (
                 uniformType == UniformType.StorageBuffer ||
                 uniformType == UniformType.UniformBuffer ||
                 uniformType == UniformType.TextureBuffer)
             {
-                bufferBindings[UniformKey.GetCanonical(key)] = binf;
+                bufferBindings[key.AsCanonical()] = binf;
             }
             // TODO: UniformType.InputAttachment is not yet implemented
         }

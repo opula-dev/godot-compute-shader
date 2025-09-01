@@ -8,28 +8,13 @@ namespace Godot.ComputeShader.Pipeline;
 
 public partial class PipelineResourceManager(RenderingDevice rd, Vector3I textureSize) : RefCounted
 {
-    private readonly RenderingDevice rd = rd;
-    private readonly Vector3I textureSize = textureSize;
-    private readonly Dictionary<UniformKey, PipelineResource> resourceMap = [];
+    private readonly RenderingDevice _rd = rd;
+    private readonly Vector3I _textureSize = textureSize;
+    private readonly Dictionary<UniformKey, PipelineResource> _resourceMap = [];
 
     // Max binding index
-    private int maxBinding = -1;
+    private int _maxBinding = -1;
 
-    private static (bool IsDirty, int NewHash) CheckBufferDirtyAndGetHash(byte[] newData, int lastEntry)
-    {
-        if (newData.Length == 0)
-        {
-            return (lastEntry == 0, 0);
-        }
-
-        var hc = new HashCode();
-        hc.AddBytes(newData);
-        int newHash = hc.ToHashCode();
-
-        bool isDirty = lastEntry != newHash;
-
-        return (isDirty, newHash);
-    }
     public void Initialize(
         PipelineAnalyzer.AnalysisResult analysis,
         Dictionary<UniformKey, RDSamplerState>? samplerStates = null)
@@ -37,17 +22,17 @@ public partial class PipelineResourceManager(RenderingDevice rd, Vector3I textur
         // Create ping-pong resources
         foreach (var (key, pingPong) in analysis.PingPongBindings)
         {
-            var resource = new PingPongTextureResource(rd, pingPong, textureSize);
+            var resource = new PingPongTextureResource(_rd, pingPong, _textureSize);
             resource.Initialize();
-            resourceMap[key] = resource;
+            _resourceMap[key] = resource;
         }
 
         // Create single textures
         foreach (var (key, texture) in analysis.TextureBindings)
         {
-            var resource = new TextureResource(rd, texture, textureSize);
+            var resource = new TextureResource(_rd, texture, _textureSize);
             resource.Initialize();
-            resourceMap[key] = resource;
+            _resourceMap[key] = resource;
         }
 
         // Create samplers
@@ -55,17 +40,17 @@ public partial class PipelineResourceManager(RenderingDevice rd, Vector3I textur
         {
             RDSamplerState? state = null;
             samplerStates?.TryGetValue(key, out state);
-            var resource = new SamplerResource(rd, sampler, state);
+            var resource = new SamplerResource(_rd, sampler, state);
             resource.Initialize();
-            resourceMap[key] = resource;
+            _resourceMap[key] = resource;
         }
 
         // Create buffers (lazy, so just add placeholders)
         foreach (var (key, buffer) in analysis.BufferBindings)
         {
-            var resource = new BufferResource(rd, buffer);
+            var resource = new BufferResource(_rd, buffer);
             resource.Initialize(); // No-op, but consistent
-            resourceMap[key] = resource;
+            _resourceMap[key] = resource;
         }
     }
 
@@ -73,7 +58,7 @@ public partial class PipelineResourceManager(RenderingDevice rd, Vector3I textur
     {
         foreach (var (key, data) in updateMap)
         {
-            if (resourceMap.TryGetValue(UniformKey.GetCanonical(key), out var resource))
+            if (_resourceMap.TryGetValue(key.AsCanonical(), out var resource))
             {
                 resource.Update(data, key);
             }
@@ -104,7 +89,7 @@ public partial class PipelineResourceManager(RenderingDevice rd, Vector3I textur
                 UniformType = info.Type
             };
 
-            if (TryGetResource(UniformKey.GetCanonical(key), out var resource))
+            if (TryGetResource(key.AsCanonical(), out var resource))
             {
                 if (key.IsRole(UniformRole.Array))
                 {
@@ -131,7 +116,7 @@ public partial class PipelineResourceManager(RenderingDevice rd, Vector3I textur
 
     public bool TryGetResource(UniformKey key, [MaybeNullWhen(false)] out PipelineResource resource)
     {
-        if (resourceMap.TryGetValue(UniformKey.GetCanonical(key), out resource))
+        if (_resourceMap.TryGetValue(key.AsCanonical(), out resource))
         {
             return true;
         }
@@ -140,18 +125,11 @@ public partial class PipelineResourceManager(RenderingDevice rd, Vector3I textur
 
     public void Cleanup()
     {
-        foreach (var (_, resource) in resourceMap)
+        foreach (var (_, resource) in _resourceMap)
         {
             resource.Cleanup();
         }
 
-        resourceMap.Clear();
-    }
-
-    private static string StripSuffix(string name)
-    {
-        if (name.EndsWith("_read")) return name[..^5];
-        if (name.EndsWith("_write")) return name[..^6];
-        return name;
+        _resourceMap.Clear();
     }
 }
