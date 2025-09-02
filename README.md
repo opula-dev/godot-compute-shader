@@ -144,9 +144,9 @@ var updateMap = new Dictionary<UniformKey, byte[]>
 pipeline.Dispatch(updateMap);
 
 // Retrieve output (e.g., after sync if needed)
-if (pipeline.TryGetOutputTexture(new UniformKey("output_texture_write"), out var outputData))
+if (pipeline.TryGetUniformResource(new UniformKey("output_texture_write"), out var rid))
 {
-    // Process outputData (byte[])
+    // Use rid for CPU-side operations
 }
 ```
 
