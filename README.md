@@ -64,67 +64,6 @@ Inspired by [Acerola-Compute](https://github.com/GarrettGunnell/Acerola-Compute)
 
 At a high level, the system follows this flow:
 
-1. **Shader Discovery and Compilation**: Scans the project for GLSL files and compiles them into kernels.
-2. **Pipeline Analysis**: Analyzes kernel uniforms to detect resources, including ping-pong pairs for optimization.
-3. **Resource Initialization**: Creates and manages GPU resources like textures, buffers, and samplers.
-4. **Dispatch Execution**: Updates resources, binds uniforms, dispatches compute workgroups, and flips ping-pong states.
-5. **Output Retrieval and Cleanup**: Extracts results and frees resources.
-
-Here's a diagram of the pipeline flow:
-
-```mermaid
-flowchart TD
-    A[User Script]
-    B[ComputeKernelRegistry Singleton - ComputeKernelRegistry.cs]
-    C[Discovers GLSL files recursively]
-    D[Compiles to ComputeKernel instances - ComputeKernel.cs]
-    E[Parses GLSL for uniforms, push constants, local sizes - GlslShaderParser.cs, UniformParser.cs]
-    F[Compiles to SPIR-V and creates pipelines]
-    G[ComputePipeline Construction - ComputePipeline.cs]
-    H[Fetches kernels by name]
-    I[Analyzes bindings for consistency and ping-pong - PipelineAnalyzer.cs]
-    J[Initializes resources - PipelineResourceManager.cs]
-    K[Textures/Buffers/Samplers - PipelineResource.cs, ResourceHelper.cs]
-    L[Ping-pong for read/write pairs - PingPongTextureResource, PingPongBufferResource in PipelineResource.cs]
-    M[Dispatch - ComputePipeline.cs]
-    N[Updates resources with user data map - UniformKey.cs for keys]
-    O[For each kernel step:]
-    P[Binds uniform sets]
-    Q[Sets push constants if present]
-    R[Dispatches workgroups calculated via local sizes]
-    S[Adds barriers for sync]
-    T[Flips ping-pong resources - IPingPongResource]
-    U[Submits and syncs on GPU]
-    V[Output Retrieval]
-    W[TryGetOutputTexture for byte array data]
-    X[Cleanup to free RIDs]
-    A --> B
-    B --> C
-    B --> D
-    D --> E
-    D --> F
-    B --> G
-    G --> H
-    G --> I
-    G --> J
-    J --> K
-    J --> L
-    G --> M
-    M --> N
-    M --> O
-    O --> P
-    P --> Q
-    Q --> R
-    R --> S
-    S --> T
-    M --> U
-    M --> V
-    V --> W
-    V --> X
-```
-
-### Some Explanations
-
 **Shader Discovery** (`ComputeKernelRegistry.cs`): As an autoload singleton, it uses `DirAccess` to scan directories like `res://shaders/` for `.glsl` files. Each file compiles into a `ComputeKernel`. Kernels are stored in a dictionary for easy access via `TryGetKernel` or `TryGetKernels`.
 
 **GLSL Parsing** (`GlslShaderParser.cs` and `UniformParser.cs`): Strips comments. Uses regex parsers (from `UniformRegex.cs`) to extract uniforms with details like binding, set, format, access (read/write), and array size. Detects push constants and local workgroup sizes (`LocalGroupParser.cs`). This creates `UniformInfo` records for binding checks.
