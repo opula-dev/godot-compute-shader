@@ -155,18 +155,16 @@ public partial class ComputePipeline : RefCounted
         }
     }
 
-    public bool TryGetOutputTexture(UniformKey key, out byte[]? texture)
+    public bool TryGetUniformResource(UniformKey key, out Rid resource)
     {
-        texture = null;
+        resource = new Rid();
 
-        if (_resourceManager.TryGetResource(key, out var resource) &&
-            resource.GetRid(key) is Rid rid &&
-            rid.IsValid)
+        if (_resourceManager.TryGetResource(key, out var pipelineResource))
         {
-            texture = _rd.TextureGetData(rid, 0);
+            resource = pipelineResource.GetRid(key);
         }
 
-        return texture != null;
+        return resource.IsValid;
     }
 
     public void Cleanup()
