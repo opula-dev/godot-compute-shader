@@ -32,7 +32,7 @@ public partial class ComputePipeline : RefCounted
             _resourceManager.Initialize(analysis, samplerStates);
         }
     }
-    public void Dispatch(Dictionary<UniformKey, byte[]> updateMap)
+    public void Dispatch(Dictionary<UniformKey, byte[]> updateMap, bool sync = false)
     {
         // Update pipeline resources with the provided data map
         _resourceManager.UpdateResources(updateMap);
@@ -50,8 +50,13 @@ public partial class ComputePipeline : RefCounted
         _rd.ComputeListEnd();
         // Submit the compute list to the GPU for execution
         _rd.Submit();
-        // Synchronize to wait for GPU completion
-        _rd.Sync();
+
+        if (sync)
+        {
+            // Synchronize to wait for GPU completion
+            // Do not use for high-frequency dispatches to avoid blocking CPU
+            _rd.Sync();
+        }
     }
 
     private void ProcessKernel(long computeList, ComputeKernel kernel, Dictionary<UniformKey, byte[]> updateMap, int stepIndex)

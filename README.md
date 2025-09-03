@@ -141,12 +141,14 @@ var updateMap = new Dictionary<UniformKey, byte[]>
 };
 
 // Dispatch the pipeline
-pipeline.Dispatch(updateMap);
+pipeline.Dispatch(updateMap, /* optional - sync: true */);
 
 // Retrieve output (e.g., after sync if needed)
 if (pipeline.TryGetUniformResource(new UniformKey("output_texture_write"), out var rid))
 {
-    // Use rid for CPU-side operations
+    // Use rid for CPU-side data management.
+    // Rid's are GPU-side memory and pulling down data requires RenderDevice syncing.
+    // However, syncing can take a while and should not be used in high-frequency.
 }
 ```
 
