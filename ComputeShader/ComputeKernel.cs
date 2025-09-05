@@ -106,19 +106,6 @@ public partial class ComputeKernel : RefCounted
         return true;
     }
 
-    public new void Free()
-    {
-        if (ComputeKernelRegistry.Instance?.ComputeDevice is not null)
-        {
-            Free(ComputeKernelRegistry.Instance?.ComputeDevice!);
-        }
-        else
-        {
-            GD.PushError($"{nameof(ComputeKernel)} free'd without rendering device. Possible memory leak.");
-        }
-        base.Free();
-    }
-
     public void Free(RenderingDevice rd)
     {
         rd.FreeRid(PipelineRid);

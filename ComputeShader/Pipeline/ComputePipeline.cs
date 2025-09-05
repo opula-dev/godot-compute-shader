@@ -8,6 +8,7 @@ namespace Godot.ComputeShader.Pipeline;
 [GlobalClass]
 public partial class ComputePipeline : RefCounted
 {
+    private readonly ComputeKernelRegistry _registry;
     private readonly RenderingDevice _rd;
     private readonly ComputeKernel[] _steps;
     private readonly Vector3I _textureSize;
@@ -16,22 +17,31 @@ public partial class ComputePipeline : RefCounted
     private bool pingPong = false;
 
     public ComputePipeline(
-        ComputeKernel[] steps,
+        ComputeKernelRegistry registry,
+        string[] steps,
         Vector3I textureSize,
         Dictionary<UniformKey, RDSamplerState>? samplerStates = null)
     {
-        _rd = ComputeKernelRegistry.Instance?.ComputeDevice
+        _registry = registry;
+        _rd = registry.ComputeDevice
             ?? throw new InvalidOperationException("ComputeShaderRegistry singleton not in scene tree.");
-        _steps = steps;
         _textureSize = textureSize;
 
         _resourceManager = new PipelineResourceManager(_rd, textureSize);
 
-        if (PipelineAnalyzer.TryAnalyze(steps, out var analysis))
+        if (_registry.TryGetKernels(steps, out _steps) &&
+            PipelineAnalyzer.TryAnalyze(_steps, out var analysis))
         {
             _resourceManager.Initialize(analysis, samplerStates);
         }
+        else
+        {
+            GD.PushError(
+                $"Error in creating compute pipeline. Either kernels " +
+                "were not able to collected or kernel analysis failed.");
+        }
     }
+
     public void Dispatch(Dictionary<UniformKey, byte[]> updateMap, bool sync = false)
     {
         // Update pipeline resources with the provided data map

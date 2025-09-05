@@ -18,53 +18,72 @@ public partial class ComputeKernelRegistry : Node
     public static readonly string KernelStorageBasePath = "res://";
     public static readonly string[] KernelFileExtensions = ["glsl"];
 
-    public static ComputeKernelRegistry? Instance => _instance;
-    private static ComputeKernelRegistry? _instance;
+    private static readonly Dictionary<string, KernelInfo> s_kernelInformation = [];
 
     public RenderingDevice? ComputeDevice => _rd;
     private RenderingDevice? _rd;
-
     private readonly Dictionary<string, ComputeKernel> _kernels = [];
-    private readonly List<KernelInfo> _discoveredKernels = [];
 
-    public override void _EnterTree()
-    {
-        if (_instance != null)
-        {
-            GD.PushError($"Duplicate {nameof(ComputeKernelRegistry)} detected; freeing this instance.");
-            QueueFree();
-            return;
-        }
+    /// <summary>
+    /// Whether or not this registry's compute shader operate on the RenderServer's
+    /// main rendering device or creates a new local rendering device.
+    /// <br/> <br/>
+    /// This is important for if you want GPU resources to be sharable with 
+    /// the Godot render pipeline like material shaders.
+    /// </summary>
+    [Export]
+    public bool UseGlobalRenderingDevice { get; set; } = false;
 
-        _instance = this;
-    }
+    /// <summary>
+    /// Whether or not to compile compute kernels when the registry is ready 
+    /// on the tree or when a pipeline requests a discovered kernel.
+    /// </summary>
+    [Export]
+    public bool CompileKernelsOnReady { get; set; } = false;
 
     public override void _Ready()
     {
-        _rd = RenderingServer.CreateLocalRenderingDevice();
-        if (_rd == null)
+        if (UseGlobalRenderingDevice)
         {
-            GD.PushError("Failed to create local RenderingDevice.");
+            _rd = RenderingServer.GetRenderingDevice();
+        }
+        else
+        {
+            _rd = RenderingServer.CreateLocalRenderingDevice();
+        }
+
+        if (_rd is null)
+        {
+            GD.PushError($"Failed to {(UseGlobalRenderingDevice ? "aquire" : "create")} RenderingDevice.");
             return;
         }
+
         DiscoverKernels(KernelStorageBasePath);
-        CompileKernels();
+
+        if (CompileKernelsOnReady)
+        {
+            CompileKernels();
+        }
     }
 
-    public override void _Notification(int what)
+    public override void _ExitTree()
     {
-        if (what == NotificationPredelete || what == NotificationWMCloseRequest)
-        {
-            Cleanup();
-        }
+        Cleanup();
     }
 
     public bool TryGetKernel(string kernelName, out ComputeKernel? kernel)
     {
+        if (_kernels.TryGetValue(kernelName, out kernel))
+        {
+            return true;
+        }
+
+        CompileKernel(kernelName);
+
         return _kernels.TryGetValue(kernelName, out kernel);
     }
 
-    public bool TryGetKernels(string[] kernelNames, out ComputeKernel[]? kernels)
+    public bool TryGetKernels(string[] kernelNames, out ComputeKernel[] kernels)
     {
         kernels = new ComputeKernel[kernelNames.Length];
         for (var i = 0; i < kernelNames.Length; i++)
@@ -72,13 +91,13 @@ public partial class ComputeKernelRegistry : Node
             _kernels.TryGetValue(kernelNames[i], out var kernel);
             if (kernel is null)
             {
-                kernels = null;
+                kernels = [];
                 break;
             }
             kernels[i] = kernel;
         }
 
-        return kernels is not null;
+        return kernels.Length != 0;
     }
 
     private void Cleanup()
@@ -95,26 +114,38 @@ public partial class ComputeKernelRegistry : Node
             }
         }
         _kernels.Clear();
-        _instance = null;
     }
 
     private void CompileKernels()
     {
-        foreach (var info in _discoveredKernels)
+        foreach (var kernelName in s_kernelInformation.Keys)
         {
-            var kernel = new ComputeKernel(_rd!, info);
-            if (!kernel.IsValid)
-            {
-                GD.PushError($"Skipping invalid shader at {kernel.Path}");
-            }
-            if (!_kernels.TryAdd(kernel.Name, kernel))
-            {
-                GD.PushError($"Skipping duplicate named shader at {kernel.Path}");
-            }
+            CompileKernel(kernelName);
         }
     }
 
-    private void DiscoverKernels(string path)
+    private void CompileKernel(string kernelName)
+    {
+        if (!s_kernelInformation.TryGetValue(kernelName, out var info))
+        {
+            GD.PushError($"Kernel '{kernelName}' not found in project");
+            return;
+        }
+
+        var kernel = new ComputeKernel(_rd!, info);
+
+        if (!kernel.IsValid)
+        {
+            GD.PushError($"Skipping invalid shader at {kernel.Path}");
+        }
+
+        if (!_kernels.TryAdd(kernel.Name, kernel))
+        {
+            GD.PushError($"Skipping duplicate named shader at {kernel.Path}");
+        }
+    }
+
+    private static void DiscoverKernels(string path)
     {
         DirAccess? iterator = DirAccess.Open(path);
 
@@ -139,7 +170,10 @@ public partial class ComputeKernelRegistry : Node
                     Name = filename.GetBaseName(),
                     Path = Path.Combine(path, filename),
                 };
-                _discoveredKernels.Add(info);
+                if (!s_kernelInformation.TryAdd(info.Name, info))
+                {
+                    GD.PushError($"Duplicate kernel name '{info.Name}' found at {info.Path}");
+                }
             }
             filename = iterator.GetNext();
         }
