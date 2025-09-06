@@ -39,14 +39,14 @@ public readonly partial struct UniformKey : IEquatable<UniformKey>
     public UniformKey(
         string baseName = "",
         UniformRole role = UniformRole.None,
-        int arraySize = -1,
+        int arrayIndex = -1,
         int step = -1,
         bool canonical = false)
     {
         IsCanonical = canonical;
         BaseName = baseName;
         Role = role;
-        ArrayIndex = arraySize;
+        ArrayIndex = arrayIndex;
         Step = step;
 
         if (!UniformKeyValidator.IsValid(this, out var errors))
