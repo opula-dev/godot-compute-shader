@@ -69,26 +69,36 @@ public static class PipelineAnalyzer
         {
             if (key.IsRole(UniformRole.Read))
             {
-                potentialReads[binf.Uniform.Name] = binf;
+                if (!potentialReads.TryAdd(key.BaseName, binf))
+                {
+                    GD.PushError($"Duplicate read binding for base name '{key.BaseName}' in pipeline.");
+                    continue;
+                }
+                potentialReads[key.BaseName] = binf;
             }
-            if (key.IsRole(UniformRole.Write))
+            else if (key.IsRole(UniformRole.Write))
             {
-                potentialWrites[binf.Uniform.Name] = binf;
+                if (!potentialWrites.TryAdd(key.BaseName, binf))
+                {
+                    GD.PushError($"Duplicate write binding for base name '{key.BaseName}' in pipeline.");
+                    continue;
+                }
             }
         }
 
         var pingPongBindings = new Dictionary<UniformKey, PingPongBindingInfo>();
 
-        // Match pairs
-        foreach (var (name, readBinf) in potentialReads)
+        foreach (var (baseName, readBinf) in potentialReads)
         {
-            if (potentialWrites.TryGetValue(name, out var writeBinf) &&
+            if (potentialWrites.TryGetValue(baseName, out var writeBinf) &&
                 readBinf.Uniform.Format == writeBinf.Uniform.Format &&
                 readBinf.Uniform.Dimension == writeBinf.Uniform.Dimension &&
                 readBinf.Uniform.Set == writeBinf.Uniform.Set)
             {
-                var canonicalPongPongKey = UniformKey.TryParse(name, readBinf.Uniform.Type).AsCanonical();
-                pingPongBindings[canonicalPongPongKey] =
+                var uniformType = readBinf.Uniform.Type;
+                var role = UniformKey.GetTypeRole(uniformType) | UniformRole.Read | UniformRole.Write;
+                var canonicalPingPongKey = new UniformKey(baseName, role, -1, -1, canonical: true);
+                pingPongBindings[canonicalPingPongKey] =
                     new PingPongBindingInfo
                     {
                         ReadBinding = readBinf,
