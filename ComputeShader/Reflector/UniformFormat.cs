@@ -6,9 +6,9 @@ namespace Godot.ComputeShader.Reflector;
 
 using DataFormat = RenderingDevice.DataFormat;
 
-public static class FormatParser
+public static class UniformFormat
 {
-    private static readonly Dictionary<string, DataFormat> s_glslImageFormatToGodotDataFormat = new(StringComparer.OrdinalIgnoreCase)
+    public static readonly Dictionary<string, DataFormat> FormatMap = new(StringComparer.OrdinalIgnoreCase)
     {
         // Single Precision Float   
         ["rgba32f"] = DataFormat.R32G32B32A32Sfloat, // 4 channels
@@ -65,15 +65,4 @@ public static class FormatParser
         // 10 Bit Unsigned RGB With 2 Bit Alpha (32bit Packed)
         ["rgb10_a2ui"] = DataFormat.A2B10G10R10UintPack32,
     };
-
-    public static bool TryGetDataFormat(string format, out DataFormat dataFormat)
-    {
-        dataFormat = DataFormat.Max;
-        if (!string.IsNullOrEmpty(format) && !s_glslImageFormatToGodotDataFormat.TryGetValue(format, out dataFormat))
-        {
-            GD.PushWarning($"Unsupported Data Format: {format}");
-            return false;
-        }
-        return true;
-    }
 }

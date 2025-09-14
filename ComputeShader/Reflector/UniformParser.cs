@@ -7,6 +7,7 @@ namespace Godot.ComputeShader.Reflector;
 
 using UniformType = RenderingDevice.UniformType;
 using DataFormat = RenderingDevice.DataFormat;
+using UniformProperty = UniformRegex.Key;
 
 [Flags]
 public enum UniformAccess
@@ -29,16 +30,81 @@ public readonly struct UniformInfo
     public uint ArraySize { get; init; }
 }
 
-public abstract class UniformParser
+public abstract class UniformParser()
 {
-    protected abstract Regex Regex { get; }
-    protected abstract UniformType UniformType { get; }
-    protected virtual bool HasFormat => false;
-    protected virtual bool HasAccess => false;
-    protected virtual bool HasDimension => false;
-    protected virtual UniformAccess DefaultAccess => UniformAccess.Read;
-    protected virtual uint DefaultDimension => 0;
-    protected virtual DataFormat DefaultFormat => DataFormat.Max;
+    protected readonly record struct ExtractContext
+    {
+        public string UniformType { get; init; }
+        public Match UniformMatch { get; init; }
+        public GroupCollection Groups { get; init; }
+        public List<string> Failures { get; init; }
+    }
+
+    // Uniform property parsing configuration
+
+    protected interface IParserConfig { } // Signature interface 
+
+    protected abstract class ParserConfig<T> : IParserConfig
+    {
+        public abstract bool IsRequired { get; }
+        public abstract T DefaultValue { get; }
+        public abstract (bool success, T value) Parser(string raw);
+    }
+
+    protected class UintParserConfig : ParserConfig<uint>
+    {
+        public override bool IsRequired => true;
+        public override uint DefaultValue => 0u;
+        public override (bool success, uint value) Parser(string raw) =>
+            (uint.TryParse(raw, out var value), value);
+    }
+
+    private class NameParserConfig : ParserConfig<string>
+    {
+        public override bool IsRequired => true;
+        public override string DefaultValue => string.Empty;
+        public override (bool success, string value) Parser(string raw)
+        {
+            var trimmed = raw.Trim();
+            return (!string.IsNullOrWhiteSpace(trimmed), trimmed);
+        }
+    };
+
+    private class BindingParserConfig : UintParserConfig;
+
+    private class SetParserConfig : UintParserConfig;
+
+    private class ArraySizeParserConfig : UintParserConfig
+    {
+        public override bool IsRequired => false;
+        public override uint DefaultValue => 1u;
+    };
+
+    protected class FormatParserConfig : ParserConfig<DataFormat>
+    {
+        public override bool IsRequired => false;
+        public override DataFormat DefaultValue => DataFormat.Max;
+        public override (bool success, DataFormat value) Parser(string raw) =>
+            (UniformFormat.FormatMap.TryGetValue(raw, out var value), value);
+    };
+
+    protected class AccessParserConfig : ParserConfig<UniformAccess>
+    {
+        public override bool IsRequired => false;
+        public override UniformAccess DefaultValue => UniformAccess.Read;
+        public override (bool success, UniformAccess value) Parser(string raw) =>
+            (AccessMap.TryGetValue(raw, out var value), value);
+    };
+
+    protected class DimensionParserConfig : UintParserConfig
+    {
+        public override bool IsRequired => false;
+        public override uint DefaultValue => 0u;
+        public override (bool success, uint value) Parser(string raw) =>
+            (DimensionMap.TryGetValue(raw, out var value), value);
+    };
+
+    // Maps
 
     protected readonly static Dictionary<string, uint> DimensionMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -55,6 +121,20 @@ public abstract class UniformParser
         {"readonly", UniformAccess.Read },
         {"writeonly", UniformAccess.Write },
     };
+
+    protected readonly Dictionary<string, IParserConfig> ParserConfigs = new()
+    {
+        [UniformProperty.Access] = new AccessParserConfig(),
+        [UniformProperty.ArraySize] = new ArraySizeParserConfig(),
+        [UniformProperty.Binding] = new BindingParserConfig(),
+        [UniformProperty.Dimension] = new DimensionParserConfig(),
+        [UniformProperty.Format] = new FormatParserConfig(),
+        [UniformProperty.Name] = new NameParserConfig(),
+        [UniformProperty.Set] = new SetParserConfig(),
+    };
+
+    protected abstract Regex Regex { get; }
+    protected abstract UniformType UniformType { get; }
 
     public IReadOnlyList<UniformInfo> Parse(string source)
     {
@@ -75,82 +155,80 @@ public abstract class UniformParser
 
     protected virtual UniformInfo? Extract(Match m)
     {
-        var groups = m.Groups;
-        var typeStr = UniformType.ToString().ToLower();
+        var uniformType = UniformType.ToString().ToLower();
 
-        var format = DefaultFormat;
-        var access = DefaultAccess;
-        var dimension = DefaultDimension;
-
-        if (!TryGetRequired(typeStr, "name", m.Value, groups, out var name) ||
-            !TryGetRequiredUInt(typeStr, "binding", m.Value, groups, out var binding) ||
-            (HasFormat && !FormatParser.TryGetDataFormat(groups["format"].Value, out format)) ||
-            (HasAccess && !AccessMap.TryGetValue(groups["access"].Value, out access)) ||
-            (HasDimension && !TryGetRequiredUInt(typeStr, "dimension", m.Value, groups, out dimension)))
+        var context = new ExtractContext
         {
+            UniformType = uniformType,
+            UniformMatch = m,
+            Groups = m.Groups,
+            Failures = [],
+        };
+
+        if (TryGet<string>(context, UniformProperty.Name, out var name) &&
+            TryGet<uint>(context, UniformProperty.Binding, out var binding) &&
+            TryGet<uint>(context, UniformProperty.Set, out var set) &&
+            TryGet<uint>(context, UniformProperty.ArraySize, out var arraySize) &&
+            TryGet<DataFormat>(context, UniformProperty.Format, out var format) &&
+            TryGet<UniformAccess>(context, UniformProperty.Access, out var access) &&
+            TryGet<uint>(context, UniformProperty.Dimension, out var dimension))
+        {
+            return new UniformInfo
+            {
+                Name = name,
+                Binding = binding,
+                Set = set,
+                Type = UniformType,
+                Format = format,
+                Access = access,
+                Dimension = dimension,
+                ArraySize = arraySize
+            };
+        }
+        else
+        {
+            ParserWarn(context);
             return null;
         }
-
-        TryGetOptionalUInt(typeStr, "set", m.Value, groups, out var set);
-        var arraySize = TryGetOptionalUInt(typeStr, "array_size", m.Value, groups, out var parsedArraySize)
-            ? parsedArraySize
-            : 1u;
-
-        return new UniformInfo
-        {
-            Name = name,
-            Binding = binding,
-            Set = set,
-            Type = UniformType,
-            Format = format,
-            Access = access,
-            Dimension = dimension,
-            ArraySize = arraySize
-        };
     }
 
-    protected static bool TryGetRequired(string type, string property, string matchValue, GroupCollection groups, out string value)
+    protected bool TryGet<T>(
+            ExtractContext context,
+            string property,
+            out T value)
     {
-        value = groups[property].Value;
-        if (string.IsNullOrEmpty(value))
+        var config = ParserConfigs[property] as ParserConfig<T>
+            ?? throw new InvalidOperationException($"Config for '{property}' does not exist for type {context.UniformType}.\n{string.Join("\n", ParserConfigs.Values)}");
+
+        string raw = context.Groups[property].Value.Trim();
+
+        var (parsedSuccess, parsedValue) = config.Parser(raw);
+        if (parsedSuccess)
         {
-            ParserWarn(type, property, matchValue);
+            value = parsedValue;
+            return true;
+        }
+        else if (config.IsRequired)
+        {
+            context.Failures.Add(property);
+            value = config.DefaultValue; // Won't be used, but initializes out param
             return false;
         }
-        return true;
+        else
+        {
+            value = config.DefaultValue;
+            return true;
+        }
     }
 
-    protected static bool TryGetRequiredUInt(string type, string property, string matchValue, GroupCollection groups, out uint value)
+    private static void ParserWarn(ExtractContext context)
     {
-        value = 0;
-        var strValue = groups[property].Value;
-        if (string.IsNullOrEmpty(strValue) || !uint.TryParse(strValue, out value))
+        var warnings = new List<string>();
+        foreach (var failedProperty in context.Failures)
         {
-            ParserWarn(type, property, matchValue);
-            return false;
+            warnings.Add($"Failed to parse {context.UniformType} uniform {failedProperty} in shader. Uniform: '{context.UniformMatch.Value}'");
         }
-        return true;
-    }
-
-    protected static bool TryGetOptionalUInt(string type, string property, string matchValue, GroupCollection groups, out uint value)
-    {
-        value = 0;
-        var strValue = groups[property].Value;
-        if (string.IsNullOrEmpty(strValue))
-        {
-            return false; // Optional: No warning, as it's defaulted
-        }
-        if (!uint.TryParse(strValue, out value))
-        {
-            ParserWarn(type, property, matchValue);
-            return false;
-        }
-        return true;
-    }
-
-    private static void ParserWarn(string type, string property, string matchValue)
-    {
-        GD.PushWarning($"Failed to parse {type} uniform {property} in shader. Uniform: '{matchValue}'");
+        GD.PushWarning(string.Join("\n", warnings));
     }
 }
 
@@ -164,48 +242,123 @@ public class SamplerWithTextureParser : UniformParser
 {
     protected override Regex Regex => UniformRegex.SamplerWithTexture();
     protected override UniformType UniformType => UniformType.SamplerWithTexture;
-    protected override bool HasDimension => true;
+
+    protected class SwTDimensionParserConfig : DimensionParserConfig
+    {
+        public override bool IsRequired => true;
+    }
+
+    public SamplerWithTextureParser()
+    {
+        ParserConfigs[UniformProperty.Dimension] = new SwTDimensionParserConfig();
+    }
 }
 
 public class SamplerWithTextureBufferParser : UniformParser
 {
     protected override Regex Regex => UniformRegex.SamplerWithTextureBuffer();
     protected override UniformType UniformType => UniformType.SamplerWithTextureBuffer;
-    protected override uint DefaultDimension => 1;
+
+    protected class SwTBDimensionParserConfig : DimensionParserConfig
+    {
+        public override uint DefaultValue => 1u;
+    }
+
+    public SamplerWithTextureBufferParser()
+    {
+        ParserConfigs[UniformProperty.Dimension] = new SwTBDimensionParserConfig();
+    }
 }
 
 public class ImageParser : UniformParser
 {
     protected override Regex Regex => UniformRegex.Image();
     protected override UniformType UniformType => UniformType.Image;
-    protected override bool HasFormat => true;
-    protected override bool HasAccess => true;
-    protected override bool HasDimension => true;
-    protected override UniformAccess DefaultAccess => UniformAccess.ReadWrite;
+
+    protected class ImageFormatParserConfig : FormatParserConfig
+    {
+        public override bool IsRequired => true;
+    };
+
+    protected class ImageAccessParserConfig : AccessParserConfig
+    {
+        public override UniformAccess DefaultValue => UniformAccess.ReadWrite;
+    };
+
+    protected class ImageDimensionParserConfig : DimensionParserConfig
+    {
+        public override bool IsRequired => true;
+        public override uint DefaultValue => 1u;
+    };
+
+    public ImageParser()
+    {
+        ParserConfigs[UniformProperty.Format] = new ImageFormatParserConfig();
+        ParserConfigs[UniformProperty.Access] = new ImageAccessParserConfig();
+        ParserConfigs[UniformProperty.Dimension] = new ImageDimensionParserConfig();
+    }
 }
 
 public class ImageBufferParser : UniformParser
 {
     protected override Regex Regex => UniformRegex.ImageBuffer();
     protected override UniformType UniformType => UniformType.ImageBuffer;
-    protected override bool HasFormat => true;
-    protected override bool HasAccess => true;
-    protected override UniformAccess DefaultAccess => UniformAccess.ReadWrite;
-    protected override uint DefaultDimension => 1;
+
+    protected class ImageBufferFormatParserConfig : FormatParserConfig
+    {
+        public override bool IsRequired => true;
+    };
+
+    protected class ImageBufferAccessParserConfig : AccessParserConfig
+    {
+        public override bool IsRequired => true;
+        public override UniformAccess DefaultValue => UniformAccess.ReadWrite;
+    };
+
+    protected class ImageBufferDimensionParserConfig : DimensionParserConfig
+    {
+        public override uint DefaultValue => 1u;
+    };
+
+    public ImageBufferParser()
+    {
+        ParserConfigs[UniformProperty.Format] = new ImageBufferFormatParserConfig();
+        ParserConfigs[UniformProperty.Access] = new ImageBufferAccessParserConfig();
+        ParserConfigs[UniformProperty.Dimension] = new ImageBufferDimensionParserConfig();
+    }
 }
 
 public class TextureParser : UniformParser
 {
     protected override Regex Regex => UniformRegex.Texture();
     protected override UniformType UniformType => UniformType.Texture;
-    protected override bool HasDimension => true;
+
+    protected class TextureDimensionParserConfig : DimensionParserConfig
+    {
+        public override bool IsRequired => true;
+        public override uint DefaultValue => 1u;
+    };
+
+    public TextureParser()
+    {
+        ParserConfigs[UniformProperty.Dimension] = new TextureDimensionParserConfig();
+    }
 }
 
 public class TextureBufferParser : UniformParser
 {
     protected override Regex Regex => UniformRegex.TextureBuffer();
     protected override UniformType UniformType => UniformType.TextureBuffer;
-    protected override uint DefaultDimension => 1;
+
+    protected class TextureBufferDimensionParserConfig : DimensionParserConfig
+    {
+        public override uint DefaultValue => 1u;
+    };
+
+    public TextureBufferParser()
+    {
+        ParserConfigs[UniformProperty.Dimension] = new TextureBufferDimensionParserConfig();
+    }
 }
 
 public class UniformBufferParser : UniformParser
@@ -218,13 +371,30 @@ public class StorageBufferParser : UniformParser
 {
     protected override Regex Regex => UniformRegex.StorageBuffer();
     protected override UniformType UniformType => UniformType.StorageBuffer;
-    protected override bool HasAccess => true;
-    protected override UniformAccess DefaultAccess => UniformAccess.ReadWrite;
+
+    protected class StorageBufferAccessParserConfig : AccessParserConfig
+    {
+        public override UniformAccess DefaultValue => UniformAccess.ReadWrite;
+    };
+
+    public StorageBufferParser()
+    {
+        ParserConfigs[UniformProperty.Access] = new StorageBufferAccessParserConfig();
+    }
 }
 
 public class InputAttachmentParser : UniformParser
 {
     protected override Regex Regex => UniformRegex.InputAttachment();
     protected override UniformType UniformType => UniformType.InputAttachment;
-    protected override uint DefaultDimension => 2;
+
+    protected class InputAttachmentDimensionParserConfig : DimensionParserConfig
+    {
+        public override uint DefaultValue => 2u;
+    };
+
+    public InputAttachmentParser()
+    {
+        ParserConfigs[UniformProperty.Dimension] = new InputAttachmentDimensionParserConfig();
+    }
 }

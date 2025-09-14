@@ -41,4 +41,15 @@ public static partial class UniformRegex
 
     [GeneratedRegex(@"layout\s*\(\s*(?:input_attachment_index\s*=\s*\d+\s*,)?\s*(?:set\s*=\s*(?<set>\d+)\s*,)?\s*binding\s*=\s*(?<binding>\d+)\s*\)\s*uniform\s*subpassInput\s*(?<name>\w+)(?:\s*\[\s*(?<array_size>\d+)\s*\])?\s*;", RegexOptions.Multiline)]
     public static partial Regex InputAttachment();
+
+    public static class Key
+    {
+        public static readonly string Access = "access";
+        public static readonly string ArraySize = "array_size";
+        public static readonly string Binding = "binding";
+        public static readonly string Dimension = "dimension";
+        public static readonly string Format = "format";
+        public static readonly string Name = "name";
+        public static readonly string Set = "set";
+    }
 }
