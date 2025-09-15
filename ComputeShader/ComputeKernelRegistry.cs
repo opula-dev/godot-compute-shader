@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using Godot;
@@ -41,6 +42,16 @@ public partial class ComputeKernelRegistry : Node
     [Export]
     public bool CompileKernelsOnReady { get; set; } = false;
 
+    /// <summary>
+    /// Static constructor
+    /// </summary>
+    static ComputeKernelRegistry()
+    {
+        DiscoverKernels(KernelStorageBasePath);
+        GD.Print("Compute kernels discovered:");
+        GD.Print(string.Join("\n", s_kernelInformation.Keys));
+    }
+
     public override void _Ready()
     {
         if (UseGlobalRenderingDevice)
@@ -58,8 +69,6 @@ public partial class ComputeKernelRegistry : Node
             return;
         }
 
-        DiscoverKernels(KernelStorageBasePath);
-
         if (CompileKernelsOnReady)
         {
             CompileKernels();
@@ -71,7 +80,7 @@ public partial class ComputeKernelRegistry : Node
         Cleanup();
     }
 
-    public bool TryGetKernel(string kernelName, out ComputeKernel? kernel)
+    public bool TryGetKernel(string kernelName, [MaybeNullWhen(false)] out ComputeKernel kernel)
     {
         if (_kernels.TryGetValue(kernelName, out kernel))
         {
@@ -88,13 +97,16 @@ public partial class ComputeKernelRegistry : Node
         kernels = new ComputeKernel[kernelNames.Length];
         for (var i = 0; i < kernelNames.Length; i++)
         {
-            _kernels.TryGetValue(kernelNames[i], out var kernel);
-            if (kernel is null)
+            if (TryGetKernel(kernelNames[i], out var kernel))
             {
+                kernels[i] = kernel;
+            }
+            else
+            {
+                GD.PushError($"Kernel not found: {kernelNames[i]}");
                 kernels = [];
                 break;
             }
-            kernels[i] = kernel;
         }
 
         return kernels.Length != 0;
